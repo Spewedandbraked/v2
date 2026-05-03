@@ -5,7 +5,9 @@ mod app;
 mod game;
 
 fn main() {
-    env_logger::init();
 
-    let app = App::new(RendererConfig::load_or_default("renderer_config.json"));
+    rend3_framework::start(
+        App::new(RendererConfig::load_or_default("renderer_config.json")),
+        winit::window::WindowBuilder::new(),
+    );
 }
