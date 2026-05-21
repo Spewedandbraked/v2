@@ -1,5 +1,7 @@
 mod config;
 mod state;
+mod texture;
+
 use log::error;
 use std::sync::Arc;
 
