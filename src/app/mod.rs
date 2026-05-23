@@ -1,6 +1,9 @@
+mod camera;
 mod config;
+pub mod light;
 mod state;
 mod texture;
+pub(crate) mod model;
 
 use log::error;
 use std::sync::Arc;
@@ -60,11 +63,10 @@ impl ApplicationHandler<State> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
-                state.update();
-                match state.render() {
+                state.update(&self.game);
+                match state.render(&self.game) {
                     Ok(_) => {}
                     Err(e) => {
-                        // Log the error and exit gracefully
                         log::error!("{e}");
                         event_loop.exit();
                     }
@@ -79,8 +81,12 @@ impl ApplicationHandler<State> for App {
                     },
                 ..
             } => {
-                if let Some(state) = &mut self.state {
-                    state.handle_key(event_loop, code, key_state.is_pressed());
+                if code == KeyCode::Escape && key_state.is_pressed() {
+                    event_loop.exit();
+                } else {
+                    self.game
+                        .camera_controller
+                        .handle_key(code, key_state.is_pressed());
                 }
             }
             _ => { /* гейминг >:] */ }
