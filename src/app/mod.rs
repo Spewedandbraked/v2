@@ -10,7 +10,7 @@ pub use config::RendererConfig;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
-    event_loop::{self, EventLoop},
+    event_loop::{self, ActiveEventLoop, EventLoop},
     keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
@@ -78,10 +78,11 @@ impl ApplicationHandler<State> for App {
                         ..
                     },
                 ..
-            } => match (code, key_state.is_pressed()) {
-                (KeyCode::Escape, true) => event_loop.exit(),
-                _ => {}
-            },
+            } => {
+                if let Some(state) = &mut self.state {
+                    state.handle_key(event_loop, code, key_state.is_pressed());
+                }
+            }
             _ => { /* гейминг >:] */ }
         }
     }

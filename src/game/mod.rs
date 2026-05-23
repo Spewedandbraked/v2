@@ -1,4 +1,4 @@
-mod camera;
+pub mod camera;
 mod world;
 
 // pub use camera::CameraController;
