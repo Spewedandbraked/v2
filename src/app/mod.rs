@@ -1,9 +1,9 @@
 mod camera;
 mod config;
 pub mod light;
+pub(crate) mod model;
 mod state;
 mod texture;
-pub(crate) mod model;
 
 use log::error;
 use std::sync::Arc;
@@ -63,7 +63,7 @@ impl ApplicationHandler<State> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
-                state.update(&self.game);
+                state.update(&mut self.game);
                 match state.render(&self.game) {
                     Ok(_) => {}
                     Err(e) => {

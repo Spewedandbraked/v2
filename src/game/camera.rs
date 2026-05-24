@@ -34,12 +34,7 @@ impl Camera {
 
 impl Default for Camera {
     fn default() -> Self {
-        Self::new(
-            Vec3::new(0.0, 2.0, 5.0),
-            Vec3::ZERO,
-            60.0,
-            16.0 / 9.0,
-        )
+        Self::new(Vec3::new(0.0, 2.0, 5.0), Vec3::ZERO, 60.0, 16.0 / 9.0)
     }
 }
 
@@ -110,20 +105,25 @@ impl CameraController {
 
     /// Обновить позицию камеры на основе нажатых клавиш
     pub fn update(&mut self, camera: &mut Camera, dt: f32) {
-        let forward = camera.forward();
-        let right = camera.right();
+        let speed = self.speed * dt;
 
-        let mut velocity = Vec3::ZERO;
-        if self.is_forward { velocity += forward; }
-        if self.is_backward { velocity -= forward; }
-        if self.is_right { velocity += right; }
-        if self.is_left { velocity -= right; }
-        if self.is_up { velocity += Vec3::Y; }
-        if self.is_down { velocity -= Vec3::Y; }
-
-        if velocity.length_squared() > 0.0 {
-            velocity = velocity.normalize();
-            camera.position += velocity * self.speed * dt;
+        if self.is_forward {
+            camera.position += camera.forward() * speed;
+        }
+        if self.is_backward {
+            camera.position -= camera.forward() * speed;
+        }
+        if self.is_right {
+            camera.position += camera.right() * speed;
+        }
+        if self.is_left {
+            camera.position -= camera.right() * speed;
+        }
+        if self.is_up {
+            camera.position += camera.up() * speed;
+        }
+        if self.is_down {
+            camera.position -= camera.up() * speed;
         }
     }
 }

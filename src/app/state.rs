@@ -1,5 +1,6 @@
 use std::{num::NonZero, sync::Arc};
 
+use image::GenericImageView;
 use winit::window::Window;
 
 use crate::{
@@ -11,10 +12,12 @@ use crate::{
         model::Vertex,
         texture::TextureAtlas,
     },
-    game::GameState,
+    game::{GameState, gltf_loader},
 };
+use wgpu::util::DeviceExt;
 
 pub struct State {
+    window: Arc<Window>,
     // wgpu-инфраструктура
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -48,6 +51,15 @@ pub struct State {
     light_bind_group: wgpu::BindGroup,
     num_tiles_x: u32,
     num_tiles_y: u32,
+
+    vertex_buffers: Vec<wgpu::Buffer>,
+    index_buffers: Vec<wgpu::Buffer>,
+    vertex_counts: Vec<u32>,
+    index_counts: Vec<u32>,
+
+    // Буфер глубины
+    depth_texture: wgpu::Texture,
+    depth_view: wgpu::TextureView,
 }
 
 impl State {
@@ -531,6 +543,139 @@ impl State {
             cache: None,
             multiview_mask: None,
         });
+        // Загрузка модели
+        let mesh_data = crate::game::gltf_loader::load_gltf("src/assets/scene.glb")?;
+        let mut vertex_buffers = Vec::new();
+        let mut index_buffers = Vec::new();
+        let mut vertex_counts = Vec::new();
+        let mut index_counts = Vec::new();
+
+        for mesh in &mesh_data {
+            let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Vertex Buffer"),
+                contents: bytemuck::cast_slice(&mesh.vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+
+            let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Index Buffer"),
+                contents: bytemuck::cast_slice(&mesh.indices),
+                usage: wgpu::BufferUsages::INDEX,
+            });
+
+            vertex_counts.push(mesh.vertices.len() as u32);
+            index_counts.push(mesh.indices.len() as u32);
+            vertex_buffers.push(vertex_buffer);
+            index_buffers.push(index_buffer);
+        }
+
+        // Загрузка текстур
+        let texture_data = gltf_loader::load_gltf_textures("src/assets/scene.glb")?;
+
+        // Создаём GPU-текстуры
+        let mut gpu_textures = Vec::new();
+        for (i, data) in texture_data.iter().enumerate() {
+            let img = image::load_from_memory(data)?;
+            let rgba = img.to_rgba8();
+            let dimensions = img.dimensions();
+
+            let size = wgpu::Extent3d {
+                width: dimensions.0,
+                height: dimensions.1,
+                depth_or_array_layers: 1,
+            };
+
+            let texture = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(&format!("Texture {}", i)),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    aspect: wgpu::TextureAspect::All,
+                    texture: &texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                },
+                &rgba,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * dimensions.0),
+                    rows_per_image: Some(dimensions.1),
+                },
+                size,
+            );
+
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            gpu_textures.push((texture, view));
+        }
+
+        // Заменить texture_atlas на первую загруженную текстуру
+        let texture_atlas = if let Some((texture, view)) = gpu_textures.first() {
+            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+                address_mode_u: wgpu::AddressMode::Repeat,
+                address_mode_v: wgpu::AddressMode::Repeat,
+                address_mode_w: wgpu::AddressMode::Repeat,
+                mag_filter: wgpu::FilterMode::Linear,
+                min_filter: wgpu::FilterMode::Nearest,
+                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
+                ..Default::default()
+            });
+
+            let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Texture Atlas Layout"),
+                entries: &[
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 0,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture {
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        },
+                        count: None,
+                    },
+                    wgpu::BindGroupLayoutEntry {
+                        binding: 1,
+                        visibility: wgpu::ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                        count: None,
+                    },
+                ],
+            });
+
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Texture Atlas Bind Group"),
+                layout: &layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            });
+
+            TextureAtlas {
+                texture: texture.clone(),
+                view: view.clone(),
+                sampler,
+                bind_group,
+                layout,
+            }
+        } else {
+            // fallback: пустая текстура
+            TextureAtlas::new(&device, &config)
+        };
         let light_culling_pipeline =
             device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                 label: Some("Light Culling Pipeline"),
@@ -540,7 +685,24 @@ impl State {
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 cache: None,
             });
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Depth Texture"),
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
         Ok(Self {
+            window,
             surface,
             device,
             queue,
@@ -563,6 +725,12 @@ impl State {
             num_tiles_x,
             num_tiles_y,
             screen_buffer,
+            vertex_buffers,
+            index_buffers,
+            vertex_counts,
+            index_counts,
+            depth_texture,
+            depth_view,
         })
     }
     pub fn render(&mut self, game: &GameState) -> anyhow::Result<()> {
@@ -644,15 +812,35 @@ impl State {
                     },
                     depth_slice: None,
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 timestamp_writes: None,
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+
+            render_pass.set_pipeline(&self.pbr_pipeline);
+            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(1, &self.texture_atlas.bind_group, &[]);
+            render_pass.set_bind_group(2, &self.light_bind_group, &[]);
+
+            for i in 0..self.vertex_buffers.len() {
+                render_pass.set_vertex_buffer(0, self.vertex_buffers[i].slice(..));
+                render_pass
+                    .set_index_buffer(self.index_buffers[i].slice(..), wgpu::IndexFormat::Uint32);
+                render_pass.draw_indexed(0..self.index_counts[i], 0, 0..1);
+            }
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+        self.window.request_redraw();
 
         Ok(())
     }
@@ -664,13 +852,13 @@ impl State {
         }
     }
 
-    pub fn update(&mut self, game: &GameState) {
+    pub fn update(&mut self, game: &mut GameState) {
+        game.camera_controller.update(&mut game.camera, 0.016);
         self.camera_uniform.update_view_proj(&game.camera);
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
             bytemuck::cast_slice(&[self.camera_uniform]),
         );
-        println!("Lights: {}", game.world.lights.len());
     }
 }
