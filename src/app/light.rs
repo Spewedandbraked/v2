@@ -1,8 +1,8 @@
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Light {
-    pub position: [f32; 3],
-    pub color: [f32; 3],
+    pub position: [f32; 4],
+    pub color: [f32; 4],
     pub intensity: f32,
     pub radius: f32,
 }

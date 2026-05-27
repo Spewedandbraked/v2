@@ -1,14 +1,17 @@
 pub mod camera;
 mod game_object;
+pub mod gltf_loader;
+pub mod gltf_model;
 mod player;
 mod world;
-pub mod gltf_model;
-pub mod gltf_loader;
 
 use player::Player;
 use world::World;
 
-use crate::{app::light::Light, game::camera::{Camera, CameraController}};
+use crate::{
+    app::light::Light,
+    game::camera::{Camera, CameraController},
+};
 
 pub struct GameState {
     pub world: World,
@@ -29,23 +32,14 @@ pub struct GameState {
 impl Default for GameState {
     fn default() -> Self {
         let mut world = World::default();
-        
-        // Красный источник слева
         world.lights.push(Light {
-            position: [-5.0, 2.0, 0.0],
-            color: [1.0, 0.0, 0.0],
-            intensity: 13.0,
+            position: [11.0, 1.0, 0.0, 0.0],
+            color: [2.0, 2.0, 2.0, 0.0],
+            intensity: 0.1,
             radius: 110.0,
         });
-        
-        // Зелёный источник сверху
-        world.lights.push(Light {
-            position: [0.0, 5.0, 0.0],
-            color: [0.0, 1.0, 0.0],
-            intensity: 13.0,
-            radius: 110.0,
-        });
-        
+
+
         Self {
             world,
             camera: Camera::default(),

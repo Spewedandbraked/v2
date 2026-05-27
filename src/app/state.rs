@@ -773,8 +773,8 @@ impl State {
         lights.resize(
             MAX_LIGHTS,
             Light {
-                position: [0.0; 3],
-                color: [0.0; 3],
+                position: [0.0; 4],
+                color: [0.0; 4],
                 intensity: 0.0,
                 radius: 0.0,
             },
