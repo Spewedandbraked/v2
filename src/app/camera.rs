@@ -2,12 +2,14 @@
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct CameraUniform {
     pub view_proj: [[f32; 4]; 4],
+    pub aspect: f32,
 }
 
 impl CameraUniform {
-    pub fn new() -> Self {
+    pub fn new(aspect: f32) -> Self {
         Self {
             view_proj: [[0.0; 4]; 4],
+            aspect
         }
     }
 
@@ -19,7 +21,7 @@ impl CameraUniform {
         );
         let projection = glam::Mat4::perspective_rh(
             camera.fov.to_radians(),
-            camera.aspect,
+            self.aspect,
             0.1,
             100.0,
         );

@@ -3,6 +3,7 @@ mod config;
 pub mod light;
 pub(crate) mod model;
 mod state;
+mod systems;
 mod texture;
 
 use log::error;
@@ -64,7 +65,7 @@ impl ApplicationHandler<State> for App {
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
                 state.update(&mut self.game);
-                match state.render(&self.game) {
+                match state.render(&self.game.camera, &self.game.world.lights) {
                     Ok(_) => {}
                     Err(e) => {
                         log::error!("{e}");
