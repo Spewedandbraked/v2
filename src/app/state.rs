@@ -13,9 +13,8 @@ use crate::{
             buffer_layouts::BufferLayouts,
             camera_system::CameraSystem,
             lightning_system::LightingSystem,
-            model_system::{ModelSystem, RenderMode},
+            model_system::{ModelSystem, RenderMode}, texture_system::TextureSystem,
         },
-        texture::TextureAtlas,
     },
     game::{GameState, gltf_loader},
 };
@@ -32,15 +31,12 @@ pub struct State {
     pub models: ModelSystem,
     pub lighting: LightingSystem,
     pub camera: CameraSystem,
+    pub textures: TextureSystem,
     pub bind_group_layouts: HashMap<String, wgpu::BindGroupLayout>,
 
     // Пайплайны
     pub pbr_pipeline: wgpu::RenderPipeline,
     pub skybox_pipeline: Option<wgpu::RenderPipeline>,
-
-    // Текстуры
-    pub texture_atlas: TextureAtlas,
-    pub material_bind_groups: Vec<wgpu::BindGroup>,
 }
 
 impl State {
@@ -164,50 +160,14 @@ impl State {
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
             gpu_textures.push((texture, view));
         }
-
-        let texture_atlas = if let Some((texture, view)) = gpu_textures.first() {
-            let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-                address_mode_u: wgpu::AddressMode::Repeat,
-                address_mode_v: wgpu::AddressMode::Repeat,
-                address_mode_w: wgpu::AddressMode::Repeat,
-                mag_filter: wgpu::FilterMode::Nearest,
-                min_filter: wgpu::FilterMode::Nearest,
-                mipmap_filter: wgpu::MipmapFilterMode::Nearest,
-                ..Default::default()
-            });
-
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("Texture Atlas Bind Group"),
-                layout: buffer_layouts.get("texture").unwrap(),
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&sampler),
-                    },
-                ],
-            });
-
-            TextureAtlas {
-                texture: texture.clone(),
-                view: view.clone(),
-                sampler,
-                bind_group,
-                layout: buffer_layouts.get("texture").unwrap().clone(),
-            }
-        } else {
-            TextureAtlas::new(
-                &device,
-                &config,
-                buffer_layouts.get("texture").unwrap().clone(),
-            )
-        };
-
+        let textures = TextureSystem::new(
+            &device,
+            &queue,
+            &config,
+            buffer_layouts.get("texture").unwrap(),
+            "src/assets/scene.glb",
+        )?;
         let skybox_pipeline: Option<wgpu::RenderPipeline> = None;
-        let material_bind_groups: Vec<wgpu::BindGroup> = Vec::new();
 
         let lighting = LightingSystem::new(
             &device,
@@ -297,12 +257,11 @@ impl State {
             config,
             pbr_pipeline,
             skybox_pipeline,
-            texture_atlas,
-            material_bind_groups,
             models,
             lighting,
-            bind_group_layouts: buffer_layouts.layouts,
             camera: camera_system,
+            textures,
+            bind_group_layouts: buffer_layouts.layouts,
         })
     }
     pub fn render(
@@ -367,7 +326,7 @@ impl State {
 
             render_pass.set_pipeline(&self.pbr_pipeline);
             render_pass.set_bind_group(0, &self.camera.bind_group, &[]);
-            render_pass.set_bind_group(1, &self.texture_atlas.bind_group, &[]);
+            render_pass.set_bind_group(1, &self.textures.atlas.bind_group, &[]);
             render_pass.set_bind_group(2, &self.lighting.light_bind_group, &[]);
 
             for model in self.models.models.iter().flatten() {

@@ -3,7 +3,6 @@ pub mod light;
 pub(crate) mod model;
 mod state;
 mod systems;
-mod texture;
 
 use std::sync::Arc;
 
