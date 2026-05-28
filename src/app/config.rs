@@ -13,7 +13,7 @@ impl RendererConfig {
             std::fs::write(path, serde_json::to_string_pretty(&config).unwrap()).unwrap();
             config
         } else {
-            let data = std::fs::read_to_string(path).unwrap();
+            let data: String = std::fs::read_to_string(path).unwrap();
             serde_json::from_str(&data).unwrap_or_else(|_| {
                 eprintln!("Failed to parse config, falling back to default.");
                 Self::default()
@@ -24,7 +24,7 @@ impl RendererConfig {
 impl Default for RendererConfig {
     fn default() -> Self {
         Self {
-            present_mode: None,
+            present_mode: Some(PresentMode::Mailbox),
             max_frame_latency: Some(2),
         }
     }

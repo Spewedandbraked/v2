@@ -1,4 +1,3 @@
-mod camera;
 mod config;
 pub mod light;
 pub(crate) mod model;
@@ -6,7 +5,6 @@ mod state;
 mod systems;
 mod texture;
 
-use log::error;
 use std::sync::Arc;
 
 use crate::{app::state::State, game::GameState};
@@ -14,7 +12,7 @@ pub use config::RendererConfig;
 use winit::{
     application::ApplicationHandler,
     event::WindowEvent,
-    event_loop::{self, ActiveEventLoop, EventLoop},
+    event_loop::EventLoop,
     keyboard::{KeyCode, PhysicalKey},
     window::Window,
 };
@@ -40,7 +38,8 @@ impl ApplicationHandler<State> for App {
 
         let window = Arc::new(event_loop.create_window(window_attributes).unwrap());
 
-        self.state = Some(pollster::block_on(State::new(window, &self.config)).unwrap())
+        self.state =
+            Some(pollster::block_on(State::new(window, &self.config, &self.game.camera)).unwrap())
     }
 
     // это обработка касстомных ивентов в главном потоке.
@@ -53,7 +52,7 @@ impl ApplicationHandler<State> for App {
     fn window_event(
         &mut self,
         event_loop: &winit::event_loop::ActiveEventLoop,
-        window_id: winit::window::WindowId,
+        _window_id: winit::window::WindowId,
         event: winit::event::WindowEvent,
     ) {
         let state = match &mut self.state {
@@ -89,6 +88,10 @@ impl ApplicationHandler<State> for App {
                         .camera_controller
                         .handle_key(code, key_state.is_pressed());
                 }
+            }
+            WindowEvent::Focused(true) => {
+                state.window.request_redraw();
+                state.surface.configure(&state.device, &state.config);
             }
             _ => { /* гейминг >:] */ }
         }

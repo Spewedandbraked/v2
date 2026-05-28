@@ -1,4 +1,4 @@
-use std::{collections::HashMap, num::NonZero, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use glam::{Mat4, Vec4};
 use image::GenericImageView;
@@ -7,12 +7,11 @@ use winit::window::Window;
 use crate::{
     app::{
         RendererConfig,
-        camera::{CameraUniform, ScreenUniform},
         config::PresentMode,
         light::*,
-        model::Vertex,
         systems::{
             buffer_layouts::BufferLayouts,
+            camera_system::CameraSystem,
             lightning_system::LightingSystem,
             model_system::{ModelSystem, RenderMode},
         },
@@ -20,7 +19,6 @@ use crate::{
     },
     game::{GameState, gltf_loader},
 };
-use wgpu::util::DeviceExt;
 
 pub struct State {
     pub window: Arc<Window>,
@@ -33,17 +31,12 @@ pub struct State {
     // Подсистемы
     pub models: ModelSystem,
     pub lighting: LightingSystem,
+    pub camera: CameraSystem,
     pub bind_group_layouts: HashMap<String, wgpu::BindGroupLayout>,
 
     // Пайплайны
     pub pbr_pipeline: wgpu::RenderPipeline,
     pub skybox_pipeline: Option<wgpu::RenderPipeline>,
-
-    // Камера
-    pub camera_uniform: CameraUniform,
-    pub camera_buffer: wgpu::Buffer,
-    pub camera_bind_group: wgpu::BindGroup,
-    pub screen_buffer: wgpu::Buffer,
 
     // Текстуры
     pub texture_atlas: TextureAtlas,
@@ -51,7 +44,11 @@ pub struct State {
 }
 
 impl State {
-    pub async fn new(window: Arc<Window>, config: &RendererConfig) -> anyhow::Result<Self> {
+    pub async fn new(
+        window: Arc<Window>,
+        config: &RendererConfig,
+        camera: &crate::game::camera::Camera,
+    ) -> anyhow::Result<Self> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             flags: Default::default(),
@@ -113,48 +110,16 @@ impl State {
         };
         surface.configure(&device, &config);
 
-        let camera = crate::game::camera::Camera::default();
-        let mut camera_uniform = CameraUniform::new(config.width as f32 / config.height as f32);
-        camera_uniform.update_view_proj(&camera);
-
-        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Camera Buffer"),
-            size: std::mem::size_of::<CameraUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        queue.write_buffer(&camera_buffer, 0, bytemuck::cast_slice(&[camera_uniform]));
-
         let buffer_layouts = BufferLayouts::new(&device);
 
-        let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Camera Bind Group"),
-            layout: buffer_layouts.get("camera").unwrap(),
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
-                    buffer: &camera_buffer,
-                    offset: 0,
-                    size: None,
-                }),
-            }],
-        });
-
-        // Screen uniform
-        let screen_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Screen Buffer"),
-            size: std::mem::size_of::<ScreenUniform>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let screen_uniform = ScreenUniform {
-            width: config.width as f32,
-            height: config.height as f32,
-        };
-        queue.write_buffer(&screen_buffer, 0, bytemuck::cast_slice(&[screen_uniform]));
-
+        let camera_system = CameraSystem::new(
+            &device,
+            &queue,
+            buffer_layouts.get("camera").unwrap(),
+            config.width,
+            config.height,
+            Some(camera),
+        );
         let texture_data = gltf_loader::load_gltf_textures("src/assets/scene.glb")?;
 
         let mut gpu_textures = Vec::new();
@@ -247,8 +212,8 @@ impl State {
         let lighting = LightingSystem::new(
             &device,
             &config,
-            &camera_buffer,
-            &camera_buffer,
+            &camera_system.buffer,
+            &camera_system.screen_buffer,
             buffer_layouts.get("light_fragment").unwrap(),
             buffer_layouts.get("light_culling").unwrap(),
         );
@@ -332,15 +297,12 @@ impl State {
             config,
             pbr_pipeline,
             skybox_pipeline,
-            camera_uniform,
-            camera_buffer,
-            camera_bind_group,
-            screen_buffer,
             texture_atlas,
             material_bind_groups,
             models,
             lighting,
             bind_group_layouts: buffer_layouts.layouts,
+            camera: camera_system,
         })
     }
     pub fn render(
@@ -348,17 +310,6 @@ impl State {
         camera: &crate::game::camera::Camera,
         lights: &[Light],
     ) -> anyhow::Result<()> {
-        // Обновляем screen buffer
-        self.queue.write_buffer(
-            &self.screen_buffer,
-            0,
-            bytemuck::cast_slice(&[ScreenUniform {
-                width: self.config.width as f32,
-                height: self.config.height as f32,
-            }]),
-        );
-
-        // Обновляем источники света в LightingSystem (только если изменились)
         self.lighting.update(&self.queue, lights);
 
         let output = match self.surface.get_current_texture() {
@@ -367,7 +318,7 @@ impl State {
                 self.surface.configure(&self.device, &self.config);
                 texture
             }
-            _ => anyhow::bail!("Failed to acquire surface texture"),
+            _ => return Ok(()),
         };
 
         let view = output
@@ -415,7 +366,7 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.pbr_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            render_pass.set_bind_group(0, &self.camera.bind_group, &[]);
             render_pass.set_bind_group(1, &self.texture_atlas.bind_group, &[]);
             render_pass.set_bind_group(2, &self.lighting.light_bind_group, &[]);
 
@@ -439,17 +390,12 @@ impl State {
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
             self.models.resize(&self.device, width, height);
-            self.camera_uniform.aspect = width as f32 / height as f32;
+            self.camera.resize(&self.queue, width, height);
         }
     }
 
     pub fn update(&mut self, game: &mut GameState) {
         game.camera_controller.update(&mut game.camera, 0.016);
-        self.camera_uniform.update_view_proj(&game.camera);
-        self.queue.write_buffer(
-            &self.camera_buffer,
-            0,
-            bytemuck::cast_slice(&[self.camera_uniform]),
-        );
+        self.camera.update(&self.queue, &game.camera);
     }
 }
