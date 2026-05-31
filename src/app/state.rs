@@ -1,7 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
 use glam::{Mat4, Vec4};
-use image::GenericImageView;
 use winit::window::Window;
 
 use crate::{
@@ -13,10 +12,11 @@ use crate::{
             buffer_layouts::BufferLayouts,
             camera_system::CameraSystem,
             lightning_system::LightingSystem,
-            model_system::{ModelSystem, RenderMode}, texture_system::TextureSystem,
+            model_system::{ModelSystem, RenderMode},
+            texture_system::TextureSystem,
         },
     },
-    game::{GameState, gltf_loader},
+    game::{GameState},
 };
 
 pub struct State {
@@ -45,6 +45,52 @@ impl State {
         config: &RendererConfig,
         camera: &crate::game::camera::Camera,
     ) -> anyhow::Result<Self> {
+        // ── 1. Инфраструктура wgpu ─────────────────────────────────
+        let (surface, device, queue, surface_config) =
+            Self::init_wgpu(window.clone(), config).await?;
+
+        // ── 2. Реестр раскладок ───────────────────────────────────
+        let buffer_layouts = BufferLayouts::new(&device);
+
+        // ── 3. Подсистемы ─────────────────────────────────────────
+        let (camera_system, textures, lighting, mut models) =
+            Self::init_systems(&device, &queue, &surface_config, &buffer_layouts, camera)?;
+
+        // ── 4. Пайплайны ──────────────────────────────────────────
+        let (pbr_pipeline, skybox_pipeline) =
+            Self::init_pipelines(&device, &surface_config, &buffer_layouts);
+
+        // ── 5. Загрузка контента ──────────────────────────────────
+        Self::load_content(&device, &queue, &mut models).await?;
+
+        // ── 6. Сборка ─────────────────────────────────────────────
+        Ok(Self {
+            window,
+            surface,
+            device,
+            queue,
+            config: surface_config,
+            pbr_pipeline,
+            skybox_pipeline,
+            models,
+            lighting,
+            camera: camera_system,
+            textures,
+            bind_group_layouts: buffer_layouts.layouts,
+        })
+    }
+
+    // region: Init Helpers
+    #[doc(hidden)]
+    async fn init_wgpu(
+        window: Arc<Window>,
+        config: &RendererConfig,
+    ) -> anyhow::Result<(
+        wgpu::Surface<'static>,
+        wgpu::Device,
+        wgpu::Queue,
+        wgpu::SurfaceConfiguration,
+    )> {
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::PRIMARY,
             flags: Default::default(),
@@ -53,7 +99,8 @@ impl State {
             display: None,
         });
 
-        let surface = instance.create_surface(window.clone())?;
+        let size = window.inner_size();
+        let surface = instance.create_surface(window)?;
 
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
@@ -74,10 +121,9 @@ impl State {
             })
             .await?;
 
-        let size = window.inner_size();
         let surface_caps = surface.get_capabilities(&adapter);
 
-        let config = wgpu::SurfaceConfiguration {
+        let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: {
                 surface_caps
@@ -104,81 +150,56 @@ impl State {
             view_formats: vec![],
             desired_maximum_frame_latency: config.max_frame_latency.unwrap_or(2) as u32,
         };
-        surface.configure(&device, &config);
+        surface.configure(&device, &surface_config);
 
-        let buffer_layouts = BufferLayouts::new(&device);
+        Ok((surface, device, queue, surface_config))
+    }
 
+    #[doc(hidden)]
+    fn init_systems(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        config: &wgpu::SurfaceConfiguration,
+        layouts: &BufferLayouts,
+        camera: &crate::game::camera::Camera,
+    ) -> anyhow::Result<(CameraSystem, TextureSystem, LightingSystem, ModelSystem)> {
         let camera_system = CameraSystem::new(
-            &device,
-            &queue,
-            buffer_layouts.get("camera").unwrap(),
+            device,
+            queue,
+            layouts.get("camera").unwrap(),
             config.width,
             config.height,
             Some(camera),
         );
-        let texture_data = gltf_loader::load_gltf_textures("src/assets/scene.glb")?;
 
-        let mut gpu_textures = Vec::new();
-        for (i, data) in texture_data.iter().enumerate() {
-            let img = image::load_from_memory(data)?;
-            let rgba = img.to_rgba8();
-            let dimensions = img.dimensions();
-
-            let size = wgpu::Extent3d {
-                width: dimensions.0,
-                height: dimensions.1,
-                depth_or_array_layers: 1,
-            };
-
-            let texture = device.create_texture(&wgpu::TextureDescriptor {
-                label: Some(&format!("Texture {}", i)),
-                size,
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-                view_formats: &[],
-            });
-
-            queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    aspect: wgpu::TextureAspect::All,
-                    texture: &texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                },
-                &rgba,
-                wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(4 * dimensions.0),
-                    rows_per_image: Some(dimensions.1),
-                },
-                size,
-            );
-
-            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-            gpu_textures.push((texture, view));
-        }
         let textures = TextureSystem::new(
-            &device,
-            &queue,
-            &config,
-            buffer_layouts.get("texture").unwrap(),
+            device,
+            queue,
+            config,
+            layouts.get("texture").unwrap(),
             "src/assets/scene.glb",
         )?;
-        let skybox_pipeline: Option<wgpu::RenderPipeline> = None;
 
         let lighting = LightingSystem::new(
-            &device,
-            &config,
+            device,
+            config,
             &camera_system.buffer,
             &camera_system.screen_buffer,
-            buffer_layouts.get("light_fragment").unwrap(),
-            buffer_layouts.get("light_culling").unwrap(),
+            layouts.get("light_fragment").unwrap(),
+            layouts.get("light_culling").unwrap(),
         );
-        let mut models = ModelSystem::new(&device, config.width, config.height);
 
+        let models = ModelSystem::new(device, config.width, config.height);
+
+        Ok((camera_system, textures, lighting, models))
+    }
+
+    #[doc(hidden)]
+    fn init_pipelines(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+        layouts: &BufferLayouts,
+    ) -> (wgpu::RenderPipeline, Option<wgpu::RenderPipeline>) {
         let pbr_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("PBR Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/pbr.wgsl").into()),
@@ -187,13 +208,14 @@ impl State {
         let pbr_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("PBR Pipeline Layout"),
             bind_group_layouts: &[
-                Some(buffer_layouts.get("camera").unwrap()),  // @group(0)
-                Some(buffer_layouts.get("texture").unwrap()), // @group(1)
-                Some(buffer_layouts.get("light_fragment").unwrap()), // @group(2)
+                Some(layouts.get("camera").unwrap()),
+                Some(layouts.get("texture").unwrap()),
+                Some(layouts.get("light_fragment").unwrap()),
             ],
             immediate_size: 0,
         });
-        let vertex_buffer_layout = buffer_layouts.vertex_layouts.get("master").unwrap();
+
+        let vertex_buffer_layout = layouts.vertex_layouts.get("master").unwrap();
         let pbr_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("PBR Pipeline"),
             layout: Some(&pbr_pipeline_layout),
@@ -237,33 +259,32 @@ impl State {
             cache: None,
             multiview_mask: None,
         });
+
+        (pbr_pipeline, None)
+    }
+
+    #[doc(hidden)]
+    async fn load_content(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        models: &mut ModelSystem,
+    ) -> anyhow::Result<()> {
         let mesh_data = crate::game::gltf_loader::load_gltf("src/assets/scene.glb")?;
         for mesh in &mesh_data {
             models.add_model(
-                &device,
-                &queue,
+                device,
+                queue,
                 &mesh.vertices,
                 &mesh.indices,
                 RenderMode::GpuDriven,
                 Mat4::IDENTITY,
-                Vec4::new(0.0, 0.0, 0.0, 1.0), // bounding-сфера (радиус 1)
+                Vec4::new(0.0, 0.0, 0.0, 1.0),
             );
         }
-        Ok(Self {
-            window,
-            surface,
-            device,
-            queue,
-            config,
-            pbr_pipeline,
-            skybox_pipeline,
-            models,
-            lighting,
-            camera: camera_system,
-            textures,
-            bind_group_layouts: buffer_layouts.layouts,
-        })
+        Ok(())
     }
+    // endregion
+    
     pub fn render(
         &mut self,
         camera: &crate::game::camera::Camera,
