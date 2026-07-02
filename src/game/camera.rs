@@ -44,12 +44,14 @@ use winit::keyboard::KeyCode;
 pub struct CameraController {
     speed: f32,
     sensitivity: f32,
-    is_forward: bool,
-    is_backward: bool,
-    is_left: bool,
-    is_right: bool,
-    is_up: bool,
-    is_down: bool,
+    pub is_forward: bool,
+    pub is_backward: bool,
+    pub is_left: bool,
+    pub is_right: bool,
+    pub is_up: bool,
+    pub is_down: bool,
+    yaw: f32,
+    pitch: f32,
 }
 
 impl CameraController {
@@ -63,73 +65,48 @@ impl CameraController {
             is_right: false,
             is_up: false,
             is_down: false,
+            yaw: 0.0,
+            pitch: 0.0,
         }
     }
 
-    /// Обработка клавиш — возвращает true, если клавиша обработана
-    pub fn handle_key(&mut self, code: KeyCode, is_pressed: bool) -> bool {
-        match code {
-            KeyCode::KeyW | KeyCode::ArrowUp => {
-                self.is_forward = is_pressed;
-                true
-            }
-            KeyCode::KeyS | KeyCode::ArrowDown => {
-                self.is_backward = is_pressed;
-                true
-            }
-            KeyCode::KeyA | KeyCode::ArrowLeft => {
-                self.is_left = is_pressed;
-                true
-            }
-            KeyCode::KeyD | KeyCode::ArrowRight => {
-                self.is_right = is_pressed;
-                true
-            }
-            KeyCode::Space => {
-                self.is_up = is_pressed;
-                true
-            }
-            KeyCode::ShiftLeft | KeyCode::ShiftRight => {
-                self.is_down = is_pressed;
-                true
-            }
-            _ => false,
-        }
+    pub fn handle_mouse(&mut self, _camera: &mut Camera, dx: f64, dy: f64) {
+        self.yaw -= dx as f32 * self.sensitivity;
+        self.pitch -= dy as f32 * self.sensitivity;
+        self.pitch = self.pitch.clamp(-1.5, 1.5); 
     }
 
-    /// Обработка движения мыши
-    pub fn handle_mouse(&mut self, dx: f64, dy: f64) {
-        // Будет вызываться из DeviceEvent::MouseMotion
-        // Пока заглушка — позже добавим поворот камеры
-    }
-
-    /// Обновить позицию камеры на основе нажатых клавиш
     pub fn update(&mut self, camera: &mut Camera, dt: f32) {
+        // Собираем кватернион из yaw/pitch
+        camera.rotation = Quat::from_euler(glam::EulerRot::YXZ, self.yaw, self.pitch, 0.0);
+
         let speed = self.speed * dt;
+        let forward = camera.forward();
+        let right = camera.right();
 
         if self.is_forward {
-            camera.position += camera.forward() * speed;
+            camera.position += forward * speed;
         }
         if self.is_backward {
-            camera.position -= camera.forward() * speed;
+            camera.position -= forward * speed;
         }
         if self.is_right {
-            camera.position += camera.right() * speed;
+            camera.position += right * speed;
         }
         if self.is_left {
-            camera.position -= camera.right() * speed;
+            camera.position -= right * speed;
         }
         if self.is_up {
-            camera.position += camera.up() * speed;
+            camera.position += Vec3::Y * speed;
         }
         if self.is_down {
-            camera.position -= camera.up() * speed;
+            camera.position -= Vec3::Y * speed;
         }
     }
 }
 
 impl Default for CameraController {
     fn default() -> Self {
-        Self::new(5.0, 0.5)
+        Self::new(1.0, 0.01)
     }
 }

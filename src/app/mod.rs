@@ -63,7 +63,7 @@ impl ApplicationHandler<State> for App {
             WindowEvent::Resized(size) => state.resize(size.width, size.height),
             WindowEvent::RedrawRequested => {
                 state.update(&mut self.game);
-                match state.render(&self.game.camera, &self.game.world.lights) {
+                match state.render(&self.game) {
                     Ok(_) => {}
                     Err(e) => {
                         log::error!("{e}");
@@ -80,12 +80,10 @@ impl ApplicationHandler<State> for App {
                     },
                 ..
             } => {
-                if code == KeyCode::Escape && key_state.is_pressed() {
-                    event_loop.exit();
-                } else {
-                    self.game
-                        .camera_controller
-                        .handle_key(code, key_state.is_pressed());
+                // TODO: решить оверхед
+                if let Some(mut instruction) = self.game.input_instructions.remove(&code) {
+                    instruction.execute(&mut self.game, key_state);
+                    self.game.input_instructions.insert(code, instruction);
                 }
             }
             WindowEvent::Focused(true) => {
@@ -93,6 +91,18 @@ impl ApplicationHandler<State> for App {
                 state.surface.configure(&state.device, &state.config);
             }
             _ => { /* гейминг >:] */ }
+        }
+    }
+    fn device_event(
+        &mut self,
+        _event_loop: &winit::event_loop::ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
+        event: winit::event::DeviceEvent,
+    ) {
+        if let winit::event::DeviceEvent::MouseMotion { delta: (dx, dy) } = event {
+            self.game
+                .camera_controller
+                .handle_mouse(&mut self.game.camera, dx, dy);
         }
     }
 }

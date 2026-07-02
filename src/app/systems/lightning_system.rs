@@ -88,7 +88,7 @@ impl LightingSystem {
                     resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
                         buffer: camera_buffer,
                         offset: 0,
-                        size: None,
+                        size: NonZero::new(144u64),
                     }),
                 },
                 wgpu::BindGroupEntry {
